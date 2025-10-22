@@ -309,7 +309,11 @@
              return `<li>
                <div class="cz-meta"><span>${escapeHtml(label)}</span><span>${escapeHtml(time)}</span></div>
                <p style="font-size:.875rem;margin:.25rem 0;">${escapeHtml(h.q)}</p>
-               <button class="cz-sub" data-reopen data-ts="${h.ts}" style="text-decoration:underline;">erneut ansehen</button>
+               <button class="cz-sub"
+  data-reopen
+  data-ts="${h.ts}"
+  style="background:transparent;border:none;padding:0;box-shadow:none;text-decoration:underline;">erneut ansehen</button>
+
              </li>`;
            }).join("")
         }</ul>`;
