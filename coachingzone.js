@@ -1,300 +1,385 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+/*
+  Coaching Zone – Vanilla JS (BVRP Style) — Voice + Auto-Bucket
+  -----------------------------------------------------------------
+  ✅ Keine React/Build-Tools nötig. Eine Datei, direkt im Browser lauffähig.
+  ✅ Spracheingabe (Web Speech API, de-DE)
+  ✅ Bereich-Tabs sind Anzeige; aktiver Bereich wird aus n8n-Antwort gesetzt
+  ✅ Markdown-Rendering (leichtgewichtig)
+  ✅ Verlauf (localStorage)
 
-/**
- * Coaching Zone – full layout (BVRP Style)
- * -------------------------------------------------
- * Includes side panels: history, glossary, data notice.
- * Buttons under textarea.
- */
+  Einbindung in HTML:
+  <script>
+    window.CoachingZoneConfig = {
+      webhookUrl: "https://n8n.srv785393.hstgr.cloud/webhook/cc723c5f-c860-48ed-b816-12b2a5c0b29c/chat",
+      mountId: "coaching-zone"
+    };
+  </script>
+  <div id="coaching-zone"></div>
+  <script src="https://CDN-ODER-GITHUB-PFAD/coachingzone-vanilla.js" defer></script>
 
-const WEBHOOK_URL_DEFAULT =
-  "https://n8n.srv785393.hstgr.cloud/webhook/cc723c5f-c860-48ed-b816-12b2a5c0b29c/chat";
+  Erwartetes n8n-Output (bevorzugt):
+  {
+    "answer": "Markdown …",
+    "bucket": "schlagtechnik", // einer von: trainingsprozess|lauftechnik|schlagtechnik|taktik|athletik
+    "sources": [{"title":"…","url":"https://…"}]
+  }
+  Alternativ (kompatibel):
+  [ { "output": "Markdown …", "bucket": "schlagtechnik" } ]
+*/
+(function () {
+  const CONFIG = Object.assign(
+    {
+      webhookUrl:
+        "https://n8n.srv785393.hstgr.cloud/webhook/cc723c5f-c860-48ed-b816-12b2a5c0b29c/chat",
+      mountId: "coaching-zone",
+      historyKey: "coaching-zone-history",
+      requestTimeoutMs: 60000,
+      buckets: [
+        { key: "trainingsprozess", label: "Trainingsprozess" },
+        { key: "lauftechnik", label: "Lauftechnik" },
+        { key: "schlagtechnik", label: "Schlagtechnik" },
+        { key: "taktik", label: "Taktik" },
+        { key: "athletik", label: "Athletik" }
+      ],
+      examples: [
+        { label: "Übung: Lift-Longline sicher lernen", q: "Welche 3-Phasen-Übung eignet sich, um den Lift Longline technisch sauber zu festigen – inkl. Progressionen für U13?", bucket: "schlagtechnik" },
+        { label: "Footwork: Einstieg Split-Step", q: "Wie vermittle ich den Split-Step Einsteigern, inkl. 10-Minuten-Aufwärmblock und Fehlerbildern?", bucket: "lauftechnik" },
+        { label: "Taktik: Doppel-Return-Varianten", q: "Welche Return-Varianten im Doppel gegen hohes Serve sind sinnvoll und wie trainiere ich die Entscheidung?", bucket: "taktik" },
+        { label: "Athletik im Jugendtraining", q: "Gib mir einen 15-Minuten-Athletikblock ohne Geräte für U11 nach dem RAMP-Schema.", bucket: "athletik" },
+        { label: "Trainingsprozess planen", q: "Plane eine 60-Minuten-Einheit Schwerpunkt Netzdrop für gemischte Gruppe (U15–U17) mit Differenzierung.", bucket: "trainingsprozess" }
+      ]
+    },
+    (window.CoachingZoneConfig || {})
+  );
 
-const KNOWLEDGE_BUCKETS = [
-  { key: "trainingsprozess", label: "Trainingsprozess" },
-  { key: "lauftechnik", label: "Lauftechnik" },
-  { key: "schlagtechnik", label: "Schlagtechnik" },
-  { key: "taktik", label: "Taktik" },
-  { key: "athletik", label: "Athletik" },
-];
+  // ---------- Utils ----------
+  const $ = (sel, el) => (el || document).querySelector(sel);
+  const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
+  const cls = (...s) => s.filter(Boolean).join(" ");
+  const escapeHtml = (str) => String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+  const prettifyHost = (url) => { try { return new URL(url).hostname.replace("www.", ""); } catch(e){ return url; } };
 
-const MINI_GLOSSARY: Record<string, string> = {
-  clear: "Hoher, weiter Schlag in die hintere Feldhälfte (Clear).",
-  lift: "Defensiver hoher Schlag aus der vorderen/hinteren Feldhälfte (Lift).",
-  longline: "Ball-/Shuttle-Platzierung entlang der Seitenlinie (Longline).",
-  drop: "Kurzer, präziser Schlag aus dem Hinterfeld ins Vorderfeld.",
-  "split-step": "Kleiner beidbeiniger Absprung zur Vorbereitung eines Richtungswechsels.",
-};
+  function loadHistory() { try { return JSON.parse(localStorage.getItem(CONFIG.historyKey) || "[]"); } catch { return []; } }
+  function saveHistory(items) { try { localStorage.setItem(CONFIG.historyKey, JSON.stringify(items.slice(0,25))); } catch {}
+  }
 
-const cls = (...s: (string | false | null | undefined)[]) => s.filter(Boolean).join(" ");
+  function markdownToHtml(md) {
+    if (!md) return "";
+    return String(md)
+      .replace(/\r/g, "")
+      .split(/\n\n+/)
+      .map((chunk) =>
+        `<p>${escapeHtml(chunk)
+          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+          .replace(/\*(.*?)\*/g, "<em>$1</em>")
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1<\/a>')
+          .replace(/\n/g, "<br/>")}</p>`
+      )
+      .join("");
+  }
 
-function useLocalStorage<T>(key: string, initial: T) {
-  const [state, setState] = useState<T>(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : initial;
-    } catch {
-      return initial;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(state));
-    } catch {}
-  }, [key, state]);
-  return [state, setState] as const;
-}
-
-function useAutoGrow(ref: React.RefObject<HTMLTextAreaElement>, value: string) {
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = Math.min(el.scrollHeight, 240) + "px";
-  }, [value, ref]);
-}
-
-async function postWithTimeout(url: string, body: any, timeoutMs = 60000) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
+  function postWithTimeout(url, body, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    let json: any = null;
-    try {
-      json = JSON.parse(text);
-    } catch {}
-    return { ok: res.ok, status: res.status, data: json ?? text };
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => {
-    return text
-      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.*?)\*/g, "<em>$1</em>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1<\/a>')
-      .replace(/\n/g, "<br/>");
-  }, [text]);
-  return <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-export default function CoachingZone({ webhookUrl }: { webhookUrl?: string }) {
-  const url = webhookUrl || WEBHOOK_URL_DEFAULT;
-  const [bucket, setBucket] = useState<string>(KNOWLEDGE_BUCKETS[0].key);
-  const [question, setQuestion] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<string | null>(null);
-  const [sources, setSources] = useState<{ title?: string; url: string }[] | null>(null);
-  const [history, setHistory] = useLocalStorage<Array<{ q: string; a: string; s?: { title?: string; url: string }[]; bucket: string; ts: number }>>(
-    "coaching-zone-history",
-    []
-  );
-
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  useAutoGrow(taRef, question);
-  const canAsk = question.trim().length > 3 && !isLoading;
-
-  // Quick examples (Schnellstart)
-  const examplePrompts = useMemo(() => ([
-    {
-      label: "Übung: Lift-Longline sicher lernen",
-      q: "Welche 3-Phasen-Übung eignet sich, um den Lift Longline technisch sauber zu festigen – inkl. Progressionen für U13?",
-      bucket: "schlagtechnik",
-    },
-    {
-      label: "Footwork: Einstieg Split-Step",
-      q: "Wie vermittle ich den Split-Step Einsteigern, inkl. 10-Minuten-Aufwärmblock und Fehlerbildern?",
-      bucket: "lauftechnik",
-    },
-    {
-      label: "Taktik: Doppel-Return-Varianten",
-      q: "Welche Return-Varianten im Doppel gegen hohes Serve sind sinnvoll und wie trainiere ich die Entscheidung?",
-      bucket: "taktik",
-    },
-    {
-      label: "Athletik im Jugendtraining",
-      q: "Gib mir einen 15-Minuten-Athletikblock ohne Geräte für U11 nach dem RAMP-Schema.",
-      bucket: "athletik",
-    },
-    {
-      label: "Trainingsprozess planen",
-      q: "Plane eine 60-Minuten-Einheit Schwerpunkt Netzdrop für gemischte Gruppe (U15–U17) mit Differenzierung.",
-      bucket: "trainingsprozess",
-    },
-  ]), []);
-
-  function useExample(ex: { q: string; bucket: string }) {
-    setBucket(ex.bucket);
-    setQuestion(ex.q);
-    setAnswer(null);
-    setSources(null);
-    setError(null);
-    setTimeout(() => { taRef.current?.focus(); }, 0);
+      signal: controller.signal
+    })
+      .then(async (res) => {
+        const text = await res.text();
+        let data; try { data = JSON.parse(text); } catch { data = text; }
+        clearTimeout(timer);
+        return { ok: res.ok, status: res.status, data };
+      })
+      .catch((err) => { clearTimeout(timer); throw err; });
   }
 
-  async function handleAsk(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (!canAsk) return;
-    setIsLoading(true);
-    setError(null);
-    setAnswer(null);
-    setSources(null);
-    const payload = { bucket, question: question.trim() };
-    const { ok, status, data } = await postWithTimeout(url, payload, 60000);
-    if (!ok) {
-      setIsLoading(false);
-      setError(`Fehler ${status}: Bitte später erneut versuchen.`);
-      return;
-    }
-    let a = "";
-    let s: { title?: string; url: string }[] | undefined = [];
-    if (Array.isArray(data)) {
-      if (data.length && typeof data[0] === "object" && ("output" in data[0])) {
-        a = data.map((x: any) => (x && x.output) ? String(x.output) : "").filter(Boolean).join("\n\n");
-      } else {
-        a = JSON.stringify(data, null, 2);
-      }
-    } else if (typeof data === "object" && data) {
-      a = (data as any).answer || (data as any).output || (data as any).text || (data as any).message || "";
-      s = (data as any).sources || (data as any).links || [];
-    } else if (typeof data === "string") {
-      a = data;
-    }
-    if (!a) a = "(Keine Antwort erhalten)";
-    setAnswer(a);
-    setSources(s || null);
-    setIsLoading(false);
-    setHistory([{ q: question.trim(), a, s, bucket, ts: Date.now() }, ...history].slice(0, 25));
+  function injectStyles(root) {
+    const style = document.createElement("style");
+    style.setAttribute("data-coaching-zone", "");
+    style.textContent = `
+      :root { --violet-50:#f5f3ff; --violet-100:#ede9fe; --violet-600:#7c3aed; --violet-700:#6d28d9; }
+      .cz-wrap { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; color:#111827; }
+      .cz-muted { color:#6b7280; }
+      .cz-container { max-width: 1120px; margin: 0 auto; padding: 1.25rem; }
+      .cz-header { position: sticky; top:0; z-index:10; backdrop-filter:saturate(180%) blur(6px); background: rgba(255,255,255,.8); border-bottom:1px solid #e5e7eb; }
+      .cz-header-inner { display:flex; align-items:center; justify-content:space-between; gap:.75rem; padding:.75rem 1rem; max-width:1120px; margin:0 auto; }
+      .cz-badge { height:36px; width:36px; border-radius:12px; background: var(--violet-100); display:flex; align-items:center; justify-content:center; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
+      .cz-title { font-size: 1.125rem; font-weight:600; line-height:1.25; }
+      .cz-sub { font-size:.75rem; color:#6b7280; }
+      .cz-grid { display:grid; grid-template-columns: 1fr; gap:1rem; }
+      @media (min-width:1024px){ .cz-grid{ grid-template-columns: 2fr 1fr; gap:1.5rem; } }
+
+      .cz-card { background:#fff; border:1px solid #e5e7eb; border-radius:1rem; box-shadow: 0 1px 2px rgba(0,0,0,.04); padding:1rem; }
+      .cz-card h2 { font-size: .95rem; font-weight:600; margin-bottom:.25rem; }
+      .cz-chip { padding:.5rem .75rem; font-size:.875rem; border:1px solid #e5e7eb; border-radius:.75rem; background:#fff; }
+      .cz-chip.active { background: var(--violet-600); color:#fff; border-color: var(--violet-600); }
+      .cz-chip.disabled { opacity:.6; cursor: not-allowed; }
+      .cz-textarea { width:100%; border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; resize:none; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
+      .cz-actions { display:flex; flex-wrap:wrap; gap:.5rem; justify-content:space-between; align-items:center; margin-top:.5rem; }
+      .cz-btn { font-size:.875rem; padding:.5rem .75rem; border-radius:.75rem; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+      .cz-btn.primary { background: var(--violet-600); color:#fff; border-color: var(--violet-600); }
+      .cz-btn.primary:hover { background: var(--violet-700); }
+      .cz-btn:disabled { background:#e5e7eb; color:#9ca3af; cursor:not-allowed; }
+
+      .cz-prose p { margin: .25rem 0 .75rem; line-height:1.6; }
+      .cz-prose a { color: var(--violet-700); text-decoration: underline; text-underline-offset: 3px; }
+      .cz-prose code { background:#f3f4f6; padding:.1rem .35rem; border-radius:.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:.85em; }
+
+      .cz-list { list-style:none; padding:0; margin:0; }
+      .cz-list li { border:1px solid #e5e7eb; border-radius:.75rem; padding:.5rem .75rem; }
+      .cz-list .cz-meta { display:flex; align-items:center; justify-content:space-between; gap:.5rem; color:#6b7280; font-size:.7rem; text-transform:uppercase; letter-spacing:.03em; }
+
+      .cz-note { background:linear-gradient(135deg, #f5f3ff, #ecfeff); border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; }
+      .cz-footer { text-align:center; color:#6b7280; font-size:.75rem; padding:2rem 0; }
+    `;
+    root.appendChild(style);
   }
 
-  function resetForm() {
-    setQuestion("");
-    setAnswer(null);
-    setSources(null);
-    setError(null);
-    taRef.current?.focus();
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-violet-50 to-white">
-      <header className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-white/70 bg-white/60 border-b">
-        <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-violet-100 flex items-center justify-center shadow-sm">🏸</div>
+  function render(rootEl) {
+    injectStyles(document.head);
+    const wrap = document.createElement("div");
+    wrap.className = "cz-wrap";
+    wrap.innerHTML = `
+      <header class="cz-header">
+        <div class="cz-header-inner">
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <div class="cz-badge">🏸</div>
             <div>
-              <h1 className="text-xl font-semibold leading-tight">Coaching Zone</h1>
-              <p className="text-xs text-gray-500">Fragen stellen • Antworten erhalten • BVRP Style</p>
+              <div class="cz-title">Coaching Zone</div>
+              <div class="cz-sub">Fragen stellen • Antworten erhalten • BVRP Style</div>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-3 text-xs text-gray-500">
-            <a href="#glossary" className="hover:text-gray-700 underline underline-offset-4">Glossar</a>
-            <span>·</span>
-            <span>Kein Popup – fest auf dieser Seite</span>
+          <div class="cz-sub" style="display:none;gap:.5rem;align-items:center;">
+            <a href="#glossary" class="cz-sub">Glossar</a><span>·</span><span>Kein Popup – fest auf dieser Seite</span>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <section className="lg:col-span-2">
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <form onSubmit={handleAsk}>
-              {/* Bereichsauswahl */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-2">Bereich</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-                  {KNOWLEDGE_BUCKETS.map((b) => (
-                    <button
-                      key={b.key}
-                      type="button"
-                      onClick={() => setBucket(b.key)}
-                      className={cls(
-                        "px-3 py-2 text-sm rounded-xl border shadow-sm",
-                        bucket === b.key ? "bg-violet-600 text-white border-violet-600" : "bg-white hover:bg-violet-50"
-                      )}
-                      aria-pressed={bucket === b.key}
-                    >
-                      {b.label}
-                    </button>
-                  ))}
+      <main class="cz-container">
+        <div class="cz-grid">
+          <section>
+            <div class="cz-card">
+              <div>
+                <label class="cz-sub" style="font-weight:600;color:#374151;">Bereich</label>
+                <div class="cz-buckets" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-top:.25rem;">
+                  ${CONFIG.buckets.map((b, i) => `<button class="cz-chip ${i===0?"active":""} disabled" data-bucket="${b.key}" disabled title="Bereich wird automatisch von n8n gesetzt">${b.label}</button>`).join("")}
                 </div>
               </div>
 
-              {/* Eingabe */}
-              <label htmlFor="question" className="block text-sm font-medium mb-2">Deine Frage</label>
-              <textarea
-                id="question"
-                ref={taRef}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                placeholder="Beschreibe präzise, was du brauchst."
-                className="w-full resize-none rounded-2xl border p-4 shadow-sm focus:outline-none focus:ring-4 focus:ring-violet-200"
-                rows={3}
-              />
-              <div className="mt-3 flex gap-2 justify-end">
-                <button type="button" onClick={resetForm} className="px-3 py-2 text-sm rounded-xl border hover:bg-gray-50">Leeren</button>
-                <button type="submit" disabled={!canAsk} className={cls("px-4 py-2 text-sm rounded-xl text-white", canAsk ? "bg-violet-600 hover:bg-violet-700" : "bg-gray-300 cursor-not-allowed")}>{isLoading ? "Sendet…" : "Frage senden"}</button>
-              </div>
-
-              {/* Schnell starten (Beispiele) */}
-              <div className="mt-4">
-                <p className="text-sm text-gray-500 mb-2">Schnell starten (Beispiele):</p>
-                <div className="flex flex-wrap gap-2">
-                  {examplePrompts.map((ex, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => useExample(ex)}
-                      className="rounded-full border px-3 py-1.5 text-xs hover:bg-violet-50"
-                    >
-                      {ex.label}
-                    </button>
-                  ))}
+              <div style="margin-top:1rem;">
+                <label class="cz-sub" for="cz-question" style="font-weight:600;color:#374151;display:block;margin-bottom:.25rem;">Deine Frage</label>
+                <textarea id="cz-question" class="cz-textarea" rows="3" maxlength="2000" placeholder="Beschreibe präzise, was du brauchst…"></textarea>
+                <div class="cz-actions">
+                  <button type="button" id="cz-voice" class="cz-btn">🎙️ Spracheingabe</button>
+                  <div style="display:flex;gap:.5rem;">
+                    <button type="button" id="cz-clear" class="cz-btn">Leeren</button>
+                    <button type="button" id="cz-send" class="cz-btn primary" disabled>Frage senden</button>
+                  </div>
                 </div>
               </div>
-            </form>
 
-            {error && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>}
-            {isLoading && <div className="mt-4 text-sm text-gray-500">Antwort wird geladen…</div>}
-            {!isLoading && answer && <div className="mt-4"><Markdown text={answer} />{sources && sources.length > 0 && (<div className="mt-4 border-t pt-3"><p className="text-sm font-medium mb-2">Quellen & Links</p><div className="flex flex-col gap-2">{sources.map((s, idx) => (<a key={s.url + idx} href={s.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm underline underline-offset-4 hover:no-underline"><span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 text-xs">{idx + 1}</span><span>{s.title || (() => { try { return new URL(s.url).hostname.replace("www.", ""); } catch { return s.url; } })()}</span></a>))}</div></div>)}</div>}
-          </div>
-        </section>
+              <div style="margin-top:1rem;">
+                <p class="cz-sub" style="margin-bottom:.25rem;">Schnell starten (Beispiele):</p>
+                <div class="cz-examples" style="display:flex;flex-wrap:wrap;gap:.5rem;"></div>
+              </div>
 
-        <aside className="lg:col-span-1 flex flex-col gap-6">
-          <div className="bg-white rounded-2xl shadow-sm border p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold">Verlauf</h3>
-              {history.length > 0 && (<button className="text-xs underline underline-offset-4 text-gray-600 hover:text-gray-800" onClick={() => localStorage.removeItem("coaching-zone-history") || window.location.reload()}>löschen</button>)}
+              <div id="cz-answer-slot" style="margin-top:1rem;"></div>
             </div>
-            {history.length === 0 ? <p className="text-sm text-gray-500">Noch keine Anfragen.</p> : (<ul className="space-y-3">{history.map((h, idx) => (<li key={idx} className="rounded-xl border p-3"><div className="flex items-center justify-between gap-2 mb-1"><span className="text-[11px] uppercase tracking-wide text-gray-500">{KNOWLEDGE_BUCKETS.find(b => b.key === h.bucket)?.label || h.bucket}</span><span className="text-[11px] text-gray-400">{new Date(h.ts).toLocaleString()}</span></div><p className="text-sm line-clamp-3 mb-1">{h.q}</p><button className="text-xs text-violet-700 underline underline-offset-4" onClick={() => { setQuestion(h.q); setBucket(h.bucket); setAnswer(h.a); setSources(h.s || null); setError(null); }}>erneut ansehen</button></li>))}</ul>)}
-          </div>
+          </section>
 
-          <div id="glossary" className="bg-white rounded-2xl shadow-sm border p-4">
-            <h3 className="text-sm font-semibold mb-2">Mini‑Glossar (Badminton)</h3>
-            <ul className="text-sm text-gray-700 space-y-2">
-              {Object.entries(MINI_GLOSSARY).map(([k, v]) => (<li key={k} className="flex items-start gap-2"><span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-violet-100">🏷️</span><div><p className="font-medium">{k}</p><p className="text-gray-500">{v}</p></div></li>))}
-            </ul>
-          </div>
+          <aside>
+            <div class="cz-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
+                <h3 style="font-size:.9rem;font-weight:600;">Verlauf</h3>
+                <button id="cz-history-clear" class="cz-sub" style="text-decoration:underline;">löschen</button>
+              </div>
+              <div id="cz-history"></div>
+            </div>
 
-          <div className="bg-gradient-to-br from-violet-50 to-emerald-50 rounded-2xl border p-4">
-            <h3 className="text-sm font-semibold mb-2">Hinweis zur Datennutzung</h3>
-            <p className="text-sm text-gray-700">Bei der Nutzung werden deine Eingaben an den BVRP‑n8n‑Webhook gesendet und dort verarbeitet. Bitte keine personenbezogenen Daten von Kindern/Jugendlichen eingeben.</p>
-          </div>
-        </aside>
+            <div id="glossary" class="cz-card cz-note">
+              <h3 style="font-size:.9rem;font-weight:600;margin-bottom:.25rem;">Mini‑Glossar (Badminton)</h3>
+              <ul id="cz-glossary" class="cz-list" style="display:flex;flex-direction:column;gap:.5rem;"></ul>
+            </div>
+
+            <div class="cz-card cz-note">
+              <h3 style="font-size:.9rem;font-weight:600;margin-bottom:.25rem;">Hinweis zur Datennutzung</h3>
+              <p class="cz-sub" style="color:#374151;">Bei der Nutzung werden deine Eingaben an den BVRP‑n8n‑Webhook gesendet und dort verarbeitet. Bitte keine personenbezogenen Daten von Kindern/Jugendlichen eingeben.</p>
+            </div>
+          </aside>
+        </div>
       </main>
 
-      <footer className="py-10 text-center text-xs text-gray-500">
-        <p>© {new Date().getFullYear()} BVRP · Coaching Zone</p>
-      </footer>
-    </div>
-  );
-}
+      <footer class="cz-footer">© ${new Date().getFullYear()} BVRP · Coaching Zone</footer>
+    `;
+
+    rootEl.innerHTML = "";
+    rootEl.appendChild(wrap);
+
+    // Refs
+    const bucketBtns = $$(".cz-buckets .cz-chip", wrap);
+    const questionEl = $("#cz-question", wrap);
+    const sendBtn = $("#cz-send", wrap);
+    const clearBtn = $("#cz-clear", wrap);
+    const voiceBtn = $("#cz-voice", wrap);
+    const answerSlot = $("#cz-answer-slot", wrap);
+    const examplesWrap = $(".cz-examples", wrap);
+    const historyWrap = $("#cz-history", wrap);
+    const historyClearBtn = $("#cz-history-clear", wrap);
+    const glossaryList = $("#cz-glossary", wrap);
+
+    // State
+    let currentBucket = CONFIG.buckets[0].key;
+    let isLoading = false;
+    let history = loadHistory();
+
+    // Voice
+    let recognition = null;
+    let speechSupported = false;
+    try {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SR) {
+        recognition = new SR();
+        recognition.lang = "de-DE";
+        recognition.interimResults = true;
+        recognition.continuous = true;
+        recognition.onresult = (evt) => {
+          let interim = "", final = "";
+          for (let i = evt.resultIndex; i < evt.results.length; i++) {
+            const res = evt.results[i];
+            if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript;
+          }
+          const base = questionEl.value.replace(/\s+$/, "");
+          const merged = (base ? base + " " : "") + (final || interim);
+          questionEl.value = merged.trimStart();
+          refreshSendState();
+          autoGrow(questionEl);
+        };
+        recognition.onend = () => voiceBtn.textContent = "🎙️ Spracheingabe";
+        speechSupported = true;
+      }
+    } catch {}
+
+    function toggleVoice(){
+      if (!speechSupported || !recognition) return;
+      const isStop = voiceBtn.textContent.indexOf("Stop") !== -1;
+      if (isStop) { try{ recognition.stop(); }catch{} voiceBtn.textContent = "🎙️ Spracheingabe"; }
+      else { try{ recognition.start(); }catch{} voiceBtn.textContent = "■ Stop"; }
+    }
+
+    // UI helpers
+    function setBucket(key) {
+      currentBucket = key;
+      bucketBtns.forEach((b) => b.classList.toggle("active", b.getAttribute("data-bucket") === key));
+    }
+    function autoGrow(textarea){ textarea.style.height = "0px"; textarea.style.height = Math.min(textarea.scrollHeight, 240) + "px"; }
+    function refreshSendState(){ sendBtn.disabled = isLoading || (questionEl.value.trim().length <= 3); }
+
+    function renderExamples(){
+      examplesWrap.innerHTML = CONFIG.examples.map(ex => `<button type="button" class="cz-btn" data-ex='${escapeHtml(JSON.stringify(ex))}'>${escapeHtml(ex.label)}</button>`).join("");
+      $$("[data-ex]", examplesWrap).forEach(btn => btn.addEventListener("click", () => {
+        const ex = JSON.parse(btn.getAttribute("data-ex"));
+        setBucket(ex.bucket);
+        questionEl.value = ex.q; autoGrow(questionEl); refreshSendState(); answerSlot.innerHTML = "";
+      }));
+    }
+
+    function renderGlossary(){
+      glossaryList.innerHTML = [
+        ["clear","Hoher, weiter Schlag in die hintere Feldhälfte (Clear)."],
+        ["lift","Defensiver hoher Schlag aus der vorderen/hinteren Feldhälfte (Lift)."],
+        ["longline","Platzierung entlang der Seitenlinie (Longline)."],
+        ["drop","Kurzer, präziser Schlag aus dem Hinterfeld ins Vorderfeld."],
+        ["split-step","Kleiner beidbeiniger Absprung zur Vorbereitung eines Richtungswechsels."]
+      ].map(([k,v])=>`<li style="display:flex;gap:.5rem;align-items:flex-start;"><span style="background:var(--violet-100);border-radius:9999px;padding:.25rem;">🏷️</span><div><div style="font-weight:600;">${escapeHtml(k)}</div><div class="cz-muted" style="color:#374151;">${escapeHtml(v)}</div></div></li>`).join("");
+    }
+
+    function renderHistory(){
+      if (!history || history.length === 0) { historyWrap.innerHTML = `<p class="cz-sub">Noch keine Anfragen.</p>`; return; }
+      historyWrap.innerHTML = `<ul class="cz-list" style="display:flex;flex-direction:column;gap:.5rem;">${history.map(h=>{
+        const label = (CONFIG.buckets.find(b=>b.key===h.bucket)||{}).label || h.bucket;
+        const time = new Date(h.ts).toLocaleString();
+        return `<li><div class="cz-meta"><span>${escapeHtml(label)}</span><span>${escapeHtml(time)}</span></div><p style="font-size:.875rem;margin:.25rem 0;">${escapeHtml(h.q)}</p><button class="cz-sub" data-reopen="1" data-ts="${h.ts}" style="text-decoration:underline;">erneut ansehen</button></li>`;}).join("")}</ul>`;
+      $$('button[data-reopen]', historyWrap).forEach(btn=>btn.addEventListener('click', ()=>{
+        const ts = +btn.getAttribute('data-ts');
+        const h = history.find(x=>x.ts===ts); if(!h) return;
+        setBucket(h.bucket); questionEl.value = h.q; autoGrow(questionEl); refreshSendState();
+        renderAnswer(h.a, h.s||[]);
+      }));
+    }
+
+    function renderAnswer(answer, sources){
+      const srcHtml = (sources && sources.length) ? `<div style="border-top:1px solid #e5e7eb;margin-top:.75rem;padding-top:.5rem;"><p style="font-size:.875rem;font-weight:600;margin-bottom:.25rem;">Quellen & Links</p><div style="display:flex;flex-direction:column;gap:.35rem;">${sources.map((s,i)=>`<a href="${s.url}" target="_blank" rel="noreferrer" style="font-size:.875rem;text-decoration:underline;text-underline-offset:3px;display:inline-flex;gap:.5rem;align-items:center;"><span style=\"display:inline-flex;align-items:center;justify-content:center;height:20px;width:20px;border-radius:9999px;border:1px solid #d1d5db;font-size:.7rem;\">${i+1}</span><span>${escapeHtml(s.title||prettifyHost(s.url))}</span></a>`).join("")}</div></div>` : "";
+      answerSlot.innerHTML = `<article class="cz-card"><h2>Antwort</h2><div class="cz-prose">${markdownToHtml(answer||"(Keine Antwort erhalten)")}</div>${srcHtml}</article>`;
+    }
+
+    function renderError(message){
+      answerSlot.innerHTML = `<div class="cz-card" style="border-color:#fecaca;background:#fef2f2;"><div style="color:#991b1b;font-size:.9rem;">${escapeHtml(message)}</div></div>`;
+    }
+
+    function setLoading(val){
+      isLoading = val; refreshSendState();
+      if(val){ answerSlot.innerHTML = `<div class="cz-card"><div class="cz-prose"><p class="cz-muted">Lade Antwort…</p></div></div>`; }
+    }
+
+    // Events
+    questionEl.addEventListener('input', ()=>{ autoGrow(questionEl); refreshSendState(); });
+    clearBtn.addEventListener('click', ()=>{ questionEl.value = ''; autoGrow(questionEl); refreshSendState(); answerSlot.innerHTML = ''; questionEl.focus(); });
+    historyClearBtn.addEventListener('click', ()=>{ localStorage.removeItem(CONFIG.historyKey); history = []; renderHistory(); });
+    voiceBtn.addEventListener('click', toggleVoice);
+
+    sendBtn.addEventListener('click', ()=>{
+      if(isLoading) return; const q = questionEl.value.trim(); if(q.length<=3) return;
+      setLoading(true);
+      const payload = { bucket: currentBucket, question: q };
+      postWithTimeout(CONFIG.webhookUrl, payload, CONFIG.requestTimeoutMs)
+        .then(({ok,status,data})=>{
+          if(!ok){ renderError(`Fehler ${status}: Bitte später erneut versuchen.`); return; }
+          let a = ""; let s = []; let detectedBucket;
+          if(Array.isArray(data)){
+            if(data.length && typeof data[0]==='object'){
+              if('output' in data[0]){ a = data.map(x=> (x && x.output)? String(x.output): "").filter(Boolean).join("\n\n"); }
+              detectedBucket = data[0].bucket;
+            } else { a = JSON.stringify(data,null,2); }
+          } else if (data && typeof data==='object'){
+            a = data.answer || data.output || data.text || data.message || "";
+            s = data.sources || data.links || [];
+            detectedBucket = data.bucket;
+          } else if (typeof data==='string'){ a = data; }
+          if(!a) a = "(Keine Antwort erhalten)";
+          const valid = new Set(CONFIG.buckets.map(b=>b.key));
+          const useBucket = (detectedBucket && valid.has(detectedBucket)) ? detectedBucket : currentBucket;
+          setBucket(useBucket);
+          renderAnswer(a, s);
+          history = [{ q, a, s, bucket: useBucket, ts: Date.now() }, ...history].slice(0,25);
+          saveHistory(history); renderHistory();
+        })
+        .catch(()=> renderError('Netzwerkfehler oder Timeout. Bitte erneut versuchen.'))
+        .finally(()=> setLoading(false));
+    });
+
+    // Init
+    renderExamples();
+    renderGlossary();
+    renderHistory();
+    refreshSendState();
+  }
+
+  function boot(){
+    const mountId = CONFIG.mountId || 'coaching-zone';
+    let root = document.getElementById(mountId);
+    if(!root){ root = document.createElement('div'); root.id = mountId; document.body.appendChild(root); }
+    render(root);
+  }
+
+  if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+})();
+
