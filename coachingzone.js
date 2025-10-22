@@ -196,7 +196,10 @@
             <div class="cz-card">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
                 <h3 style="font-size:.9rem;font-weight:600;">Verlauf</h3>
-                <button id="cz-history-clear" class="cz-sub" style="text-decoration:underline;">löschen</button>
+                <button id="cz-history-clear"
+  class="cz-sub"
+  style="background:transparent;border:none;padding:0;box-shadow:none;text-decoration:underline;">löschen</button>
+
               </div>
               <div id="cz-history"></div>
             </div>
