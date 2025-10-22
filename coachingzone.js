@@ -1,30 +1,29 @@
-/*
-  Coaching Zone – Vanilla JS (BVRP Style) — Voice + Auto-Bucket
-  -----------------------------------------------------------------
-  ✅ Keine React/Build-Tools nötig. Eine Datei, direkt im Browser lauffähig.
-  ✅ Spracheingabe (Web Speech API, de-DE)
-  ✅ Bereich-Tabs sind Anzeige; aktiver Bereich wird aus n8n-Antwort gesetzt
-  ✅ Markdown-Rendering (leichtgewichtig)
-  ✅ Verlauf (localStorage)
+/* Coaching Zone – Vanilla JS (BVRP Style) — Voice + HTML + History
+   -----------------------------------------------------------------
+   ✅ Keine React/Build-Tools nötig. Eine Datei, direkt im Browser lauffähig.
+   ✅ Spracheingabe (Web Speech API, de-DE) ohne Duplikate
+   ✅ Antwort-Rendering: HTML direkt, ```html ... ```-Blöcke, sonst leichtes Markdown
+   ✅ Verlauf (localStorage)
+   ✅ Quickfragen
+   ✅ BVRP-Style + sauberes Spacing in der rechten Spalte
 
-  Einbindung in HTML:
-  <script>
-    window.CoachingZoneConfig = {
-      webhookUrl: "https://n8n.srv785393.hstgr.cloud/webhook/cc723c5f-c860-48ed-b816-12b2a5c0b29c/chat",
-      mountId: "coaching-zone"
-    };
-  </script>
-  <div id="coaching-zone"></div>
-  <script src="https://CDN-ODER-GITHUB-PFAD/coachingzone-vanilla.js" defer></script>
+   Einbindung im HTML (vor diesem Script):
+   <script>
+     window.CoachingZoneConfig = {
+       webhookUrl: "https://n8n.srv785393.hstgr.cloud/webhook/cc723c5f-c860-48ed-b816-12b2a5c0b29c/chat",
+       mountId: "coaching-zone"
+     };
+   </script>
+   <div id="coaching-zone"></div>
+   <script src="PATH/zu/coachingzone-vanilla.js" defer></script>
 
-  Erwartetes n8n-Output (bevorzugt):
-  {
-    "answer": "Markdown …",
-    "bucket": "schlagtechnik", // einer von: trainingsprozess|lauftechnik|schlagtechnik|taktik|athletik
-    "sources": [{"title":"…","url":"https://…"}]
-  }
-  Alternativ (kompatibel):
-  [ { "output": "Markdown …", "bucket": "schlagtechnik" } ]
+   Erwartetes n8n-Output:
+   Bevorzugt:
+   { "answer": "<h1>…</h1> oder Markdown", "bucket": "schlagtechnik", "sources":[{"title":"…","url":"https://…"}] }
+   Alternativ kompatibel:
+   [ { "output":"…", "bucket":"schlagtechnik" } ]
+
+   Gültige bucket-Keys (für Verlauf/Label): trainingsprozess|lauftechnik|schlagtechnik|taktik|athletik
 */
 (function () {
   const CONFIG = Object.assign(
@@ -42,11 +41,11 @@
         { key: "athletik", label: "Athletik" }
       ],
       examples: [
-        { label: "Übung: Lift-Longline sicher lernen", q: "Welche 3-Phasen-Übung eignet sich, um den Lift Longline technisch sauber zu festigen – inkl. Progressionen für U13?", bucket: "schlagtechnik" },
-        { label: "Footwork: Einstieg Split-Step", q: "Wie vermittle ich den Split-Step Einsteigern, inkl. 10-Minuten-Aufwärmblock und Fehlerbildern?", bucket: "lauftechnik" },
-        { label: "Taktik: Doppel-Return-Varianten", q: "Welche Return-Varianten im Doppel gegen hohes Serve sind sinnvoll und wie trainiere ich die Entscheidung?", bucket: "taktik" },
-        { label: "Athletik im Jugendtraining", q: "Gib mir einen 15-Minuten-Athletikblock ohne Geräte für U11 nach dem RAMP-Schema.", bucket: "athletik" },
-        { label: "Trainingsprozess planen", q: "Plane eine 60-Minuten-Einheit Schwerpunkt Netzdrop für gemischte Gruppe (U15–U17) mit Differenzierung.", bucket: "trainingsprozess" }
+        { label: "Übung: Lift-Longline sicher lernen", q: "Welche 3-Phasen-Übung eignet sich, um den Lift Longline technisch sauber zu festigen – inkl. Progressionen für U13?" },
+        { label: "Footwork: Einstieg Split-Step", q: "Wie vermittle ich den Split-Step Einsteigern, inkl. 10-Minuten-Aufwärmblock und Fehlerbildern?" },
+        { label: "Taktik: Doppel-Return-Varianten", q: "Welche Return-Varianten im Doppel gegen hohes Serve sind sinnvoll und wie trainiere ich die Entscheidung?" },
+        { label: "Athletik im Jugendtraining", q: "Gib mir einen 15-Minuten-Athletikblock ohne Geräte für U11 nach dem RAMP-Schema." },
+        { label: "Trainingsprozess planen", q: "Plane eine 60-Minuten-Einheit Schwerpunkt Netzdrop für gemischte Gruppe (U15–U17) mit Differenzierung." }
       ]
     },
     (window.CoachingZoneConfig || {})
@@ -56,32 +55,35 @@
   const $ = (sel, el) => (el || document).querySelector(sel);
   const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
   const cls = (...s) => s.filter(Boolean).join(" ");
-  const escapeHtml = (str) => String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-  const prettifyHost = (url) => { try { return new URL(url).hostname.replace("www.", ""); } catch(e){ return url; } };
+  const escapeHtml = (str) =>
+    String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  const prettifyHost = (url) => {
+    try { return new URL(url).hostname.replace("www.", ""); }
+    catch { return url; }
+  };
 
   function loadHistory() { try { return JSON.parse(localStorage.getItem(CONFIG.historyKey) || "[]"); } catch { return []; } }
-  function saveHistory(items) { try { localStorage.setItem(CONFIG.historyKey, JSON.stringify(items.slice(0,25))); } catch {}
-  }
+  function saveHistory(items) { try { localStorage.setItem(CONFIG.historyKey, JSON.stringify(items.slice(0,25))); } catch {} }
 
-  function markdownToHtml(md) {
-    if (!md) return "";
-    return String(md)
-      .replace(/\r/g, "")
-      .split(/\n\n+/)
-      .map((chunk) =>
-        `<p>${escapeHtml(chunk)
-          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-          .replace(/\*(.*?)\*/g, "<em>$1</em>")
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1<\/a>')
-          .replace(/\n/g, "<br/>")}</p>`
-      )
-      .join("");
+  function mdOrHtmlToHtml(text) {
+    if (!text) return "";
+    // ```html ... ```
+    const fence = text.match(/^```html\s*?\n([\s\S]*?)\n```$/i);
+    if (fence) return fence[1];
+    // enthält HTML-Tags → direkt rendern
+    if (/<\/?[a-z][\s\S]*>/i.test(text)) return text;
+    // leichter Markdown-Fallback
+    return String(text)
+      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.*?)\*/g, "<em>$1</em>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+      .replace(/\n/g, "<br/>");
   }
 
   function postWithTimeout(url, body, timeoutMs) {
@@ -121,31 +123,32 @@
       .cz-card { background:#fff; border:1px solid #e5e7eb; border-radius:1rem; box-shadow: 0 1px 2px rgba(0,0,0,.04); padding:1rem; }
       .cz-card h2 { font-size: .95rem; font-weight:600; margin-bottom:.25rem; }
       .cz-chip { padding:.5rem .75rem; font-size:.875rem; border:1px solid #e5e7eb; border-radius:.75rem; background:#fff; }
-      .cz-chip.active { background: var(--violet-600); color:#fff; border-color: var(--violet-600); }
-      .cz-chip.disabled { opacity:.6; cursor: not-allowed; }
-      .cz-textarea { width:100%; border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; resize:none; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
-      .cz-actions { display:flex; flex-wrap:wrap; gap:.5rem; justify-content:space-between; align-items:center; margin-top:.5rem; }
       .cz-btn { font-size:.875rem; padding:.5rem .75rem; border-radius:.75rem; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
       .cz-btn.primary { background: var(--violet-600); color:#fff; border-color: var(--violet-600); }
       .cz-btn.primary:hover { background: var(--violet-700); }
       .cz-btn:disabled { background:#e5e7eb; color:#9ca3af; cursor:not-allowed; }
+      .cz-textarea { width:100%; border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; resize:none; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
+      .cz-actions { display:flex; flex-wrap:wrap; gap:.5rem; justify-content:space-between; align-items:center; margin-top:.5rem; }
 
       .cz-prose p { margin: .25rem 0 .75rem; line-height:1.6; }
       .cz-prose a { color: var(--violet-700); text-decoration: underline; text-underline-offset: 3px; }
       .cz-prose code { background:#f3f4f6; padding:.1rem .35rem; border-radius:.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:.85em; }
 
       .cz-list { list-style:none; padding:0; margin:0; }
-      .cz-list li { border:1px solid #e5e7eb; border-radius:.75rem; padding:.5rem .75rem; }
+      .cz-list li { border:1px solid #e5e7eb; border-radius:.75rem; padding:.75rem; }
+      .cz-list + .cz-list-item { margin-top:.75rem; }
       .cz-list .cz-meta { display:flex; align-items:center; justify-content:space-between; gap:.5rem; color:#6b7280; font-size:.7rem; text-transform:uppercase; letter-spacing:.03em; }
-
       .cz-note { background:linear-gradient(135deg, #f5f3ff, #ecfeff); border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; }
       .cz-footer { text-align:center; color:#6b7280; font-size:.75rem; padding:2rem 0; }
+      .space-y-6 > * + * { margin-top:1.5rem; }
+      .space-y-4 > * + * { margin-top:1rem; }
     `;
     root.appendChild(style);
   }
 
   function render(rootEl) {
     injectStyles(document.head);
+
     const wrap = document.createElement("div");
     wrap.className = "cz-wrap";
     wrap.innerHTML = `
@@ -169,13 +172,6 @@
           <section>
             <div class="cz-card">
               <div>
-                <label class="cz-sub" style="font-weight:600;color:#374151;">Bereich</label>
-                <div class="cz-buckets" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-top:.25rem;">
-                  ${CONFIG.buckets.map((b, i) => `<button class="cz-chip ${i===0?"active":""} disabled" data-bucket="${b.key}" disabled title="Bereich wird automatisch von n8n gesetzt">${b.label}</button>`).join("")}
-                </div>
-              </div>
-
-              <div style="margin-top:1rem;">
                 <label class="cz-sub" for="cz-question" style="font-weight:600;color:#374151;display:block;margin-bottom:.25rem;">Deine Frage</label>
                 <textarea id="cz-question" class="cz-textarea" rows="3" maxlength="2000" placeholder="Beschreibe präzise, was du brauchst…"></textarea>
                 <div class="cz-actions">
@@ -196,7 +192,7 @@
             </div>
           </section>
 
-          <aside>
+          <aside class="space-y-6">
             <div class="cz-card">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
                 <h3 style="font-size:.9rem;font-weight:600;">Verlauf</h3>
@@ -206,13 +202,13 @@
             </div>
 
             <div id="glossary" class="cz-card cz-note">
-              <h3 style="font-size:.9rem;font-weight:600;margin-bottom:.25rem;">Mini‑Glossar (Badminton)</h3>
-              <ul id="cz-glossary" class="cz-list" style="display:flex;flex-direction:column;gap:.5rem;"></ul>
+              <h3 style="font-size:.9rem;font-weight:600;margin-bottom:.25rem;">Mini-Glossar (Badminton)</h3>
+              <ul id="cz-glossary" class="cz-list space-y-4"></ul>
             </div>
 
             <div class="cz-card cz-note">
               <h3 style="font-size:.9rem;font-weight:600;margin-bottom:.25rem;">Hinweis zur Datennutzung</h3>
-              <p class="cz-sub" style="color:#374151;">Bei der Nutzung werden deine Eingaben an den BVRP‑n8n‑Webhook gesendet und dort verarbeitet. Bitte keine personenbezogenen Daten von Kindern/Jugendlichen eingeben.</p>
+              <p class="cz-sub" style="color:#374151;">Bei der Nutzung werden deine Eingaben an den BVRP-n8n-Webhook gesendet und dort verarbeitet. Bitte keine personenbezogenen Daten von Kindern/Jugendlichen eingeben.</p>
             </div>
           </aside>
         </div>
@@ -225,11 +221,10 @@
     rootEl.appendChild(wrap);
 
     // Refs
-    const bucketBtns = $$(".cz-buckets .cz-chip", wrap);
     const questionEl = $("#cz-question", wrap);
-    const sendBtn = $("#cz-send", wrap);
-    const clearBtn = $("#cz-clear", wrap);
-    const voiceBtn = $("#cz-voice", wrap);
+    const sendBtn    = $("#cz-send", wrap);
+    const clearBtn   = $("#cz-clear", wrap);
+    const voiceBtn   = $("#cz-voice", wrap);
     const answerSlot = $("#cz-answer-slot", wrap);
     const examplesWrap = $(".cz-examples", wrap);
     const historyWrap = $("#cz-history", wrap);
@@ -237,13 +232,12 @@
     const glossaryList = $("#cz-glossary", wrap);
 
     // State
-    let currentBucket = CONFIG.buckets[0].key;
     let isLoading = false;
     let history = loadHistory();
 
-    // Voice
-    let recognition = null;
-    let speechSupported = false;
+    // Voice (keine Duplikate)
+    let recognition = null, speechSupported = false;
+    let sessionPrefix = "", finalText = "";
     try {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SR) {
@@ -251,74 +245,91 @@
         recognition.lang = "de-DE";
         recognition.interimResults = true;
         recognition.continuous = true;
+        recognition.onstart = () => { sessionPrefix = questionEl.value.trimEnd(); finalText = ""; voiceBtn.textContent = "■ Stop"; };
+        recognition.onend   = () => { voiceBtn.textContent = "🎙️ Spracheingabe"; };
         recognition.onresult = (evt) => {
-          let interim = "", final = "";
+          let interim = "";
           for (let i = evt.resultIndex; i < evt.results.length; i++) {
             const res = evt.results[i];
-            if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript;
+            if (res.isFinal) finalText += res[0].transcript;
+            else interim += res[0].transcript;
           }
-          const base = questionEl.value.replace(/\s+$/, "");
-          const merged = (base ? base + " " : "") + (final || interim);
+          const merged = (sessionPrefix ? sessionPrefix + " " : "") + (finalText + (interim || ""));
           questionEl.value = merged.trimStart();
-          refreshSendState();
           autoGrow(questionEl);
+          refreshSendState();
         };
-        recognition.onend = () => voiceBtn.textContent = "🎙️ Spracheingabe";
         speechSupported = true;
       }
     } catch {}
 
     function toggleVoice(){
       if (!speechSupported || !recognition) return;
-      const isStop = voiceBtn.textContent.indexOf("Stop") !== -1;
-      if (isStop) { try{ recognition.stop(); }catch{} voiceBtn.textContent = "🎙️ Spracheingabe"; }
-      else { try{ recognition.start(); }catch{} voiceBtn.textContent = "■ Stop"; }
+      if (voiceBtn.textContent.indexOf("Stop") !== -1) { try { recognition.stop(); } catch {} }
+      else { try { recognition.start(); } catch {} }
     }
 
     // UI helpers
-    function setBucket(key) {
-      currentBucket = key;
-      bucketBtns.forEach((b) => b.classList.toggle("active", b.getAttribute("data-bucket") === key));
-    }
-    function autoGrow(textarea){ textarea.style.height = "0px"; textarea.style.height = Math.min(textarea.scrollHeight, 240) + "px"; }
+    function autoGrow(el){ el.style.height = "0px"; el.style.height = Math.min(el.scrollHeight, 240) + "px"; }
     function refreshSendState(){ sendBtn.disabled = isLoading || (questionEl.value.trim().length <= 3); }
 
     function renderExamples(){
-      examplesWrap.innerHTML = CONFIG.examples.map(ex => `<button type="button" class="cz-btn" data-ex='${escapeHtml(JSON.stringify(ex))}'>${escapeHtml(ex.label)}</button>`).join("");
-      $$("[data-ex]", examplesWrap).forEach(btn => btn.addEventListener("click", () => {
-        const ex = JSON.parse(btn.getAttribute("data-ex"));
-        setBucket(ex.bucket);
-        questionEl.value = ex.q; autoGrow(questionEl); refreshSendState(); answerSlot.innerHTML = "";
+      examplesWrap.innerHTML = CONFIG.examples.map(ex => `<button type="button" class="cz-btn" data-q="${escapeHtml(ex.q)}">${escapeHtml(ex.label)}</button>`).join("");
+      $$("[data-q]", examplesWrap).forEach(btn => btn.addEventListener("click", () => {
+        questionEl.value = btn.getAttribute("data-q") || "";
+        autoGrow(questionEl); refreshSendState(); answerSlot.innerHTML = "";
       }));
     }
 
     function renderGlossary(){
-      glossaryList.innerHTML = [
+      const entries = [
         ["clear","Hoher, weiter Schlag in die hintere Feldhälfte (Clear)."],
         ["lift","Defensiver hoher Schlag aus der vorderen/hinteren Feldhälfte (Lift)."],
         ["longline","Platzierung entlang der Seitenlinie (Longline)."],
         ["drop","Kurzer, präziser Schlag aus dem Hinterfeld ins Vorderfeld."],
         ["split-step","Kleiner beidbeiniger Absprung zur Vorbereitung eines Richtungswechsels."]
-      ].map(([k,v])=>`<li style="display:flex;gap:.5rem;align-items:flex-start;"><span style="background:var(--violet-100);border-radius:9999px;padding:.25rem;">🏷️</span><div><div style="font-weight:600;">${escapeHtml(k)}</div><div class="cz-muted" style="color:#374151;">${escapeHtml(v)}</div></div></li>`).join("");
+      ];
+      glossaryList.innerHTML = entries.map(([k,v]) =>
+        `<li style="display:flex;gap:.5rem;align-items:flex-start;">
+           <span style="background:var(--violet-100);border-radius:9999px;padding:.25rem;">🏷️</span>
+           <div><div style="font-weight:600;">${escapeHtml(k)}</div><div class="cz-muted" style="color:#374151;">${escapeHtml(v)}</div></div>
+         </li>`).join("");
     }
 
     function renderHistory(){
       if (!history || history.length === 0) { historyWrap.innerHTML = `<p class="cz-sub">Noch keine Anfragen.</p>`; return; }
-      historyWrap.innerHTML = `<ul class="cz-list" style="display:flex;flex-direction:column;gap:.5rem;">${history.map(h=>{
-        const label = (CONFIG.buckets.find(b=>b.key===h.bucket)||{}).label || h.bucket;
-        const time = new Date(h.ts).toLocaleString();
-        return `<li><div class="cz-meta"><span>${escapeHtml(label)}</span><span>${escapeHtml(time)}</span></div><p style="font-size:.875rem;margin:.25rem 0;">${escapeHtml(h.q)}</p><button class="cz-sub" data-reopen="1" data-ts="${h.ts}" style="text-decoration:underline;">erneut ansehen</button></li>`;}).join("")}</ul>`;
+      historyWrap.innerHTML =
+        `<ul class="cz-list space-y-4">${
+           history.map(h=>{
+             const label = (CONFIG.buckets.find(b=>b.key===h.bucket)||{}).label || h.bucket || "";
+             const time = new Date(h.ts).toLocaleString();
+             return `<li>
+               <div class="cz-meta"><span>${escapeHtml(label)}</span><span>${escapeHtml(time)}</span></div>
+               <p style="font-size:.875rem;margin:.25rem 0;">${escapeHtml(h.q)}</p>
+               <button class="cz-sub" data-reopen data-ts="${h.ts}" style="text-decoration:underline;">erneut ansehen</button>
+             </li>`;
+           }).join("")
+        }</ul>`;
       $$('button[data-reopen]', historyWrap).forEach(btn=>btn.addEventListener('click', ()=>{
-        const ts = +btn.getAttribute('data-ts');
-        const h = history.find(x=>x.ts===ts); if(!h) return;
-        setBucket(h.bucket); questionEl.value = h.q; autoGrow(questionEl); refreshSendState();
+        const ts = +btn.getAttribute('data-ts'); const h = history.find(x=>x.ts===ts); if(!h) return;
+        questionEl.value = h.q; autoGrow(questionEl); refreshSendState();
         renderAnswer(h.a, h.s||[]);
       }));
     }
 
     function renderAnswer(answer, sources){
-      const srcHtml = (sources && sources.length) ? `<div style="border-top:1px solid #e5e7eb;margin-top:.75rem;padding-top:.5rem;"><p style="font-size:.875rem;font-weight:600;margin-bottom:.25rem;">Quellen & Links</p><div style="display:flex;flex-direction:column;gap:.35rem;">${sources.map((s,i)=>`<a href="${s.url}" target="_blank" rel="noreferrer" style="font-size:.875rem;text-decoration:underline;text-underline-offset:3px;display:inline-flex;gap:.5rem;align-items:center;"><span style=\"display:inline-flex;align-items:center;justify-content:center;height:20px;width:20px;border-radius:9999px;border:1px solid #d1d5db;font-size:.7rem;\">${i+1}</span><span>${escapeHtml(s.title||prettifyHost(s.url))}</span></a>`).join("")}</div></div>` : "";
-      answerSlot.innerHTML = `<article class="cz-card"><h2>Antwort</h2><div class="cz-prose">${markdownToHtml(answer||"(Keine Antwort erhalten)")}</div>${srcHtml}</article>`;
+      const body = mdOrHtmlToHtml(answer || "(Keine Antwort erhalten)");
+      const srcHtml = (sources && sources.length)
+        ? `<div style="border-top:1px solid #e5e7eb;margin-top:.75rem;padding-top:.5rem;">
+             <p style="font-size:.875rem;font-weight:600;margin-bottom:.25rem;">Quellen & Links</p>
+             <div style="display:flex;flex-direction:column;gap:.35rem;">
+               ${sources.map((s,i)=>`<a href="${s.url}" target="_blank" rel="noreferrer" style="font-size:.875rem;text-decoration:underline;text-underline-offset:3px;display:inline-flex;gap:.5rem;align-items:center;">
+                   <span style="display:inline-flex;align-items:center;justify-content:center;height:20px;width:20px;border-radius:9999px;border:1px solid #d1d5db;font-size:.7rem;">${i+1}</span>
+                   <span>${escapeHtml(s.title||prettifyHost(s.url))}</span>
+                 </a>`).join("")}
+             </div>
+           </div>` : "";
+      answerSlot.innerHTML = `<article class="cz-card"><h2>Antwort</h2><div class="cz-prose">${body}</div>${srcHtml}</article>`;
     }
 
     function renderError(message){
@@ -337,9 +348,10 @@
     voiceBtn.addEventListener('click', toggleVoice);
 
     sendBtn.addEventListener('click', ()=>{
-      if(isLoading) return; const q = questionEl.value.trim(); if(q.length<=3) return;
+      if(isLoading) return;
+      const q = questionEl.value.trim(); if(q.length<=3) return;
       setLoading(true);
-      const payload = { bucket: currentBucket, question: q };
+      const payload = { question: q }; // Bereich raus – wird ggf. von n8n zurückgegeben
       postWithTimeout(CONFIG.webhookUrl, payload, CONFIG.requestTimeoutMs)
         .then(({ok,status,data})=>{
           if(!ok){ renderError(`Fehler ${status}: Bitte später erneut versuchen.`); return; }
@@ -355,11 +367,8 @@
             detectedBucket = data.bucket;
           } else if (typeof data==='string'){ a = data; }
           if(!a) a = "(Keine Antwort erhalten)";
-          const valid = new Set(CONFIG.buckets.map(b=>b.key));
-          const useBucket = (detectedBucket && valid.has(detectedBucket)) ? detectedBucket : currentBucket;
-          setBucket(useBucket);
           renderAnswer(a, s);
-          history = [{ q, a, s, bucket: useBucket, ts: Date.now() }, ...history].slice(0,25);
+          history = [{ q, a, s, bucket: detectedBucket, ts: Date.now() }, ...history].slice(0,25);
           saveHistory(history); renderHistory();
         })
         .catch(()=> renderError('Netzwerkfehler oder Timeout. Bitte erneut versuchen.'))
@@ -382,4 +391,5 @@
 
   if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
 })();
+
 
